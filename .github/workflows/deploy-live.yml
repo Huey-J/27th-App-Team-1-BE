@@ -1,0 +1,52 @@
+name: Deploy LIVE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-live:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build & Push LIVE Image
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}:live .
+          docker push ghcr.io/${{ github.repository }}:live
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy LIVE
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
+            set -e
+            cd ${{ secrets.LIVE_SERVER_PATH }}
+
+            cat > .env << ENVEOF
+            SPRING_DATASOURCE_URL=${{ secrets.LIVE_DB_URL }}
+            SPRING_DATASOURCE_USERNAME=${{ secrets.LIVE_DB_USER }}
+            SPRING_DATASOURCE_PASSWORD=${{ secrets.LIVE_DB_PASSWORD }}
+            IMAGE_NAME=ghcr.io/${{ github.repository }}:live
+            TAG=live
+            ENVEOF
+
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker compose ps
+          EOF
+
+      - name: Cleanup SSH
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa
+          rm -f ~/.ssh/known_hosts
